@@ -3,7 +3,9 @@
 #include <string.h>
 #include <ctype.h>
 
-#define TK_ASSERT(expr, ...) {                          \
+#include <assert.h>
+
+#define TK_REQUIRE(expr, ...) {                          \
     if (!(expr)) {                                      \
         fprintf(stderr, "Token Error: " __VA_ARGS__);   \
         exit(-1);                                       \
@@ -15,7 +17,7 @@ void tk_skip_spaces(tokenizer_t* tk);
 
 void tk_read_token(tokenizer_t* tk);
 void tk_read_directive(tokenizer_t* tk);
-void tk_read_label_or_mnem(tokenizer_t* tk);
+void tk_read_label_or_symbol(tokenizer_t* tk);
 void tk_read_number(tokenizer_t* tk);
 void tk_read_string(tokenizer_t* tk);
 void tk_read_register(tokenizer_t* tk);
@@ -29,9 +31,9 @@ static inline char tk_peek(tokenizer_t* tk) {
 static inline char tk_consume(tokenizer_t* tk) {
     if (tk_peek(tk) == '\n') {
         tk->line++;
-        tk->col = 1;
+        tk->column = 1;
     } else {
-        tk->col ++;
+        tk->column ++;
     }
     return tk->src[tk->position++];
 }
@@ -86,7 +88,7 @@ GQueue* tokenize(const char* src) {
     tk.srclen = strlen(src);
     tk.position = 0;
     tk.line = 1;
-    tk.col = 1;
+    tk.column = 1;
     tk.tokens = g_queue_new();
     tk.registers = g_hash_table_new(g_str_hash, g_str_equal);
     tk_populate_registers(tk.registers);
@@ -121,34 +123,41 @@ void tk_read_token(tokenizer_t* tk) {
     } else if (c == '$') {
         tk_read_register(tk);
     } else if (isalpha(c)) {
-        tk_read_label_or_mnem(tk);
+        tk_read_label_or_symbol(tk);
     } else if (isdigit(c) || c == '-' || c == '+') {
         tk_read_number(tk);
     } else if (c == '"') {
         tk_read_string(tk);
     } else if (c == ',') {
+        uint32_t line = tk->line, column = tk->column;
         tk_consume(tk);
         token_t* token = g_new(token_t, 1);
         token->type = TK_COMMA;
         token->str = NULL;
+        token->line = line;
+        token->column = column;
         g_queue_push_tail(tk->tokens, token);
     } else if (c == '\n') {
+        uint32_t line = tk->line, column = tk->column;
         tk_consume(tk);
         token_t* token = g_new(token_t, 1);
         token->type = TK_NEWLINE;
         token->str = NULL;
+        token->line = line;
+        token->column = column;
         g_queue_push_tail(tk->tokens, token);
     } else if (c == ';') {
         while (tk_remain(tk) && tk_peek(tk) != '\n') {
             tk_consume(tk);
         }
     } else {
-        FATAL("Unexpected character: %c\n (%d:%d)", c, tk->line, tk->col)
+        FATAL("Unexpected character: %c\n (%d:%d)", c, tk->line, tk->column)
     }
 }
 
 void tk_read_directive(tokenizer_t* tk) {
-    TK_ASSERT(tk_consume(tk) == '.', "Expected a dot (%d:%d)\n", tk->line, tk->col)
+    uint32_t line = tk->line, column = tk->column;
+    assert(tk_consume(tk) == '.');
 
     uint32_t pos = tk->position;
     while (isalpha(tk_peek(tk))) {
@@ -158,11 +167,14 @@ void tk_read_directive(tokenizer_t* tk) {
     token_t* token = g_new(token_t, 1);
     token->type = TK_DIRECTIVE;
     token->str = g_strndup(tk->src + pos, tk->position - pos);
+    token->line = line;
+    token->column = column;
 
     g_queue_push_tail(tk->tokens, token);
 }
 
-void tk_read_label_or_mnem(tokenizer_t* tk) {
+void tk_read_label_or_symbol(tokenizer_t* tk) {
+    uint32_t line = tk->line, column = tk->column;
     uint32_t pos = tk->position;
     bool label = false;
     while (isalpha(tk_peek(tk))) {
@@ -176,62 +188,82 @@ void tk_read_label_or_mnem(tokenizer_t* tk) {
     }
 
     token_t* token = g_new(token_t, 1);
-    token->type = label ? TK_LABEL : TK_MNEM;
+    token->type = label ? TK_LABEL : TK_SYMBOL;
     token->str = g_strndup(tk->src + pos, len);
+    token->line = line;
+    token->column = column;
+
     g_queue_push_tail(tk->tokens, token);
 }
 
 void tk_read_number(tokenizer_t* tk) {
+    uint32_t line = tk->line, column = tk->column;
     char* end;
     token_t* token = g_new(token_t, 1);
     token->type = TK_NUMBER;
-    token->number = strtol(tk->src + tk->position, &end, 0);
+    token->num = strtol(tk->src + tk->position, &end, 0);
+    token->line = line;
+    token->column = column;
     if (errno == ERANGE) {
-        FATAL("Parsed number does not fit a Word (%d:%d)", tk->line, tk->col)
+        FATAL("Parsed num does not fit a Word (%d:%d)", tk->line, tk->column)
     }
     tk->position = (size_t) end - (size_t) tk->src;
     g_queue_push_tail(tk->tokens, token);
 }
 
 void tk_read_string(tokenizer_t* tk) {
-    TK_ASSERT(tk_consume(tk) == '"', "String not starting with \" (%d:%d)\n", tk->line, tk->col)
+    uint32_t line = tk->line, column = tk->column;
+    assert(tk_consume(tk) == '"');
     uint32_t pos = tk->position;
     while (tk_remain(tk) && tk_peek(tk) != '"') {
         tk_consume(tk);
     }
     uint32_t len = tk->position - pos;
-    TK_ASSERT(tk_consume(tk) == '"', "Unexpected end of file parsing string.")
+    if (tk_consume(tk) != '"') {
+        FATAL("Token Error: Unexpected end of file parsing string.")
+    }
     const gchar* str = g_strndup(tk->src + pos, len);
     const gchar* estr = g_strcompress(str);
     g_free((gpointer) str);
     token_t* token = g_new(token_t, 1);
     token->type = TK_STRING;
     token->str = estr;
+    token->line = line;
+    token->column = column;
     g_queue_push_tail(tk->tokens, token);
 }
 
 void tk_read_register(tokenizer_t* tk) {
-    TK_ASSERT(tk_consume(tk) == '$', "Register not starting with $ (%d:%d)", tk->line, tk->col)
+    uint32_t line = tk->line, column = tk->column;
+    assert(tk_consume(tk) == '$');
     uint32_t pos = tk->position;
+
     bool number = true;
     while (isalnum(tk_peek(tk))) {
         if (!isdigit(tk_peek(tk)))
             number = false;
         tk_consume(tk);
     }
+
     token_t* token = g_new(token_t, 1);
     token->type = TK_REGISTER;
+    token->line = line;
+    token->column = column;
+
     uint32_t len = tk->position - pos;
     gchar* str = g_strndup(tk->src + pos, len);
+
     if (number) {
-        token->number = strtol(str, NULL, 10);
+        token->reg = strtol(str, NULL, 10);
     } else {
         if (g_hash_table_contains(tk->registers, str)) {
-            token->number = (gsize) g_hash_table_lookup(tk->registers, str);
+            token->reg = (gsize) g_hash_table_lookup(tk->registers, str);
         } else {
-            FATAL("Invalid Register Name: %s (%d:%d)\n", str, tk->line, tk->col)
+            FATAL("Invalid Register Name: %s (%d:%d)\n", str, tk->line, tk->column)
         }
     }
+
+    g_free(str);
     g_queue_push_tail(tk->tokens, token);
 }
 

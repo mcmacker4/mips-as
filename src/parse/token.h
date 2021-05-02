@@ -7,7 +7,7 @@
 typedef enum tokentype {
     TK_DIRECTIVE,
     TK_LABEL,
-    TK_MNEM,
+    TK_SYMBOL,
     TK_REGISTER,
     TK_NUMBER,
     TK_COMMA,
@@ -19,53 +19,61 @@ typedef struct token {
     tokentype_t type;
     union {
         const char* str;
-        uint32_t number;
+        uint32_t num;
+        uint32_t reg;
+    };
+
+    struct {
+        uint32_t line;
+        uint32_t column;
     };
 } token_t;
 
-static void free_token(gpointer t) {
+static void token_free(gpointer t) {
     token_t* token = (token_t*) t;
     switch (token->type) {
         case TK_DIRECTIVE:
         case TK_LABEL:
-        case TK_MNEM:
+        case TK_SYMBOL:
         case TK_STRING:
             g_free((gpointer) token->str);
             break;
         default:
             break;
     }
+    g_free(token);
 }
 
 static void print_token(gpointer t, gpointer d)  {
     token_t* token = (token_t*) t;
+    FILE* file = (FILE*) d;
     switch (token->type) {
         case TK_DIRECTIVE:
-            printf("DIRECTIVE(%s)\n", token->str);
+            fprintf(file, "DIRECTIVE(%s)", token->str);
             break;
         case TK_LABEL:
-            printf("LABEL(%s:)\n", token->str);
+            fprintf(file, "LABEL(%s:)", token->str);
             break;
-        case TK_MNEM:
-            printf("MNEMONIC(%s)\n", token->str);
+        case TK_SYMBOL:
+            fprintf(file, "MNEMONIC(%s)", token->str);
             break;
         case TK_REGISTER:
-            printf("REGISTER($%d)\n", token->number);
+            fprintf(file, "REGISTER($%d)", token->reg);
             break;
         case TK_NUMBER:
-            printf("NUMBER(0x%08x)\n", token->number);
+            fprintf(file, "NUMBER(0x%08x)", token->num);
             break;
         case TK_STRING: {
             gchar *str = g_strescape(token->str, NULL);
-            printf("STRING(%s)\n", str);
+            fprintf(file, "STRING(%s)", str);
             g_free(str);
             break;
         }
         case TK_COMMA:
-            printf("COMMA(,)\n");
+            fprintf(file, "COMMA(,)");
             break;
         case TK_NEWLINE:
-            printf("NEWLINE(\\n)\n");
+            fprintf(file, "NEWLINE(\\n)");
             break;
     }
 }

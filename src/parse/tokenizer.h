@@ -15,7 +15,7 @@ typedef struct tokenizer {
     uint32_t position;
 
     uint32_t line;
-    uint32_t col;
+    uint32_t column;
 
     GHashTable* registers;
 } tokenizer_t;

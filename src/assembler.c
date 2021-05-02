@@ -13,7 +13,7 @@ assembler_t assembler_new(const char* src, size_t len) {
 }
 
 void assembler_free(assembler_t* as) {
-    g_queue_free_full(as->tokens, free_token);
+    g_queue_free_full(as->tokens, token_free);
 }
 
 static inline token_t* peek(assembler_t* as) {
